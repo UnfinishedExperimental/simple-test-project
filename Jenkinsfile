@@ -8,48 +8,33 @@ stage("checkout") {
     }
 }
 
-
-stage("aaa") {
-    node {
-        unstash "sources"
-        def output
-        docker.image('maven:alpine').inside {
-            sh "mvn build-helper:remove-project-artifact $ops"
-            output = sh returnStdout: true, script: "mvn clean install $ops -pl aaa -am"
-        }
-        echo output
-        stash includes: stashList(output, wsRepo), name: 'aaa-artifacts'
-    }
-}
+buildAndStash("aaa", true)
 
 parallel b: {
-
-    stage("bbb") {
-        node {
-            unstash "sources"
-            docker.image('maven:alpine').inside {
-                sh returnStdout: true, script: "mvn build-helper:remove-project-artifact $ops"
-                unstash "aaa-artifacts"
-                sh "mvn clean install $ops -pl bbb"
-            }
-        }
-    }
+    buildAndStash(project: "bbb", deps: ["aaa"] )
 }, c: {
+    buildAndStash(project:"ccc", deps: ["aaa"])
+}
 
-    stage("ccc") {
+def buildAndStash(String project, boolean alsoMake = false, String[] deps = []) {
+    stage(project) {
         node {
             unstash "sources"
+            def output
             docker.image('maven:alpine').inside {
-                sh returnStdout: true, script: "mvn build-helper:remove-project-artifact $ops"
-                unstash "aaa-artifacts"
-                sh "mvn clean install $ops -pl ccc"
+                sh "mvn build-helper:remove-project-artifact $ops"
+                for (String d : deps) {
+                    unstash "$d-artifacts"
+                }
+                output = sh returnStdout: true, script: "mvn clean install $ops -pl $project ${alsoMake ? '-am' : ''}"
             }
+            echo output
+            stash includes: stashList(output, wsRepo), name: "$project-artifacts"
         }
     }
 }
 
-
-def stashList(String output, String repo) {
+String stashList(String output, String repo) {
     def installs = output.split('\n').findAll { it -> it.startsWith("[INFO] Installing") && !it.contains(" at end") && !it.contains("Installing artifact ") }
     def artifacts = installs.collect { it -> it.split(" ")[4] }
     artifacts.collect { l -> l.substring(l.indexOf(repo)) }.join(",")
